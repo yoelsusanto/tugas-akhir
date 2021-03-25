@@ -6,8 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/labstack/echo/v4"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"log"
 	"net/http"
 )
+
+var tracer = otel.Tracer("tugas-akhir")
+
+func handleErr(err error, message string) {
+	if err != nil {
+		log.Fatalf("%s: %v", message, err)
+	}
+}
 
 // GenerateLoad does a sha256 operation for some Repetition
 func GenerateLoad(repetition int) string {
@@ -19,6 +31,9 @@ func GenerateLoad(repetition int) string {
 }
 
 func main() {
+	shutdown := initProvider()
+	defer shutdown()
+
 	e := echo.New()
 
 	e.POST("/work", func(ctx echo.Context) error {
@@ -27,6 +42,9 @@ func main() {
 		if err != nil {
 			return err
 		}
+
+		_, span := tracer.Start(ctx.Request().Context(), "work", trace.WithAttributes(attribute.Int("repetition", req.Repetition)))
+		defer span.End()
 
 		var forwardResponses []ForwardResponse
 
