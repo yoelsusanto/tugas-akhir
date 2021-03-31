@@ -80,6 +80,7 @@ func main() {
 			}
 
 			header := req.Header
+			header.Set("Content-Type", "application/json")
 			propagator.Inject(ctx, propagation.HeaderCarrier(header))
 
 			resp, err := client.Do(req)
