@@ -2,15 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/labstack/echo/v4"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"log"
 	"net/http"
+	"os"
 )
 
 var tracer = otel.Tracer("tugas-akhir")
@@ -22,7 +26,10 @@ func handleErr(err error, message string) {
 }
 
 // GenerateLoad does a sha256 operation for some Repetition
-func GenerateLoad(repetition int) string {
+func GenerateLoad(ctx context.Context, repetition int) string {
+	_, span := tracer.Start(ctx, "GenerateLoad", trace.WithAttributes(attribute.Int("repetition", repetition)))
+	defer span.End()
+
 	hash := "someString"
 	for i := 0; i <= repetition; i++ {
 		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(hash)))
@@ -34,19 +41,29 @@ func main() {
 	shutdown := initProvider()
 	defer shutdown()
 
-	e := echo.New()
+	serviceName, ok := os.LookupEnv("SERVICE_NAME")
+	if !ok {
+		log.Fatal("cannot get service name from env variables")
+	}
 
-	e.POST("/work", func(ctx echo.Context) error {
+	e := echo.New()
+	e.Use(otelecho.Middleware(serviceName))
+
+	propagator := otel.GetTextMapPropagator()
+
+	e.POST("/work", func(echoCtx echo.Context) error {
+		ctx := echoCtx.Request().Context()
 		req := &ReceivedTraffic{}
-		err := ctx.Bind(req)
+		err := echoCtx.Bind(req)
 		if err != nil {
 			return err
 		}
 
-		_, span := tracer.Start(ctx.Request().Context(), "work", trace.WithAttributes(attribute.Int("repetition", req.Repetition)))
-		defer span.End()
+		result := GenerateLoad(ctx, req.Repetition)
 
 		var forwardResponses []ForwardResponse
+
+		client := &http.Client{}
 
 		for _, forward := range req.Forwards {
 			forwardJson, err := json.Marshal(forward)
@@ -55,14 +72,24 @@ func main() {
 			}
 
 			url := fmt.Sprintf("http://%s", forward.Service)
-			r, err := http.Post(url, "application/json", bytes.NewReader(forwardJson))
+
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(forwardJson))
 			if err != nil {
 				fmt.Printf("err creating a request: %+v\n", err)
+				return err
+			}
+
+			header := req.Header
+			propagator.Inject(ctx, propagation.HeaderCarrier(header))
+
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Printf("err executing request: %+v\n", err)
 				continue
 			}
 
 			svcSelfResponse := &SelfResponse{}
-			err = json.NewDecoder(r.Body).Decode(svcSelfResponse)
+			err = json.NewDecoder(resp.Body).Decode(svcSelfResponse)
 			if err != nil {
 				fmt.Printf("err unmarshalling request: %+v\n", err)
 				continue
@@ -75,8 +102,7 @@ func main() {
 			})
 		}
 
-		result := GenerateLoad(req.Repetition)
-		return ctx.JSON(http.StatusOK, SelfResponse{
+		return echoCtx.JSON(http.StatusOK, SelfResponse{
 			Result:          result,
 			Repetition:      req.Repetition,
 			ForwardResponse: forwardResponses,
