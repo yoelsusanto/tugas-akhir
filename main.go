@@ -56,6 +56,7 @@ func main() {
 		req := &ReceivedTraffic{}
 		err := echoCtx.Bind(req)
 		if err != nil {
+			fmt.Printf("Error binding request to req: %+v\n", err)
 			return err
 		}
 

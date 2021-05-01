@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -57,10 +58,20 @@ func initProvider() func() {
 	log.Printf("trying to create batch span processor")
 	bsp := sdktrace.NewBatchSpanProcessor(exp)
 
+	samplingRatioStr, ok := os.LookupEnv("OTEL_SAMPLING_RATIO")
+	if !ok {
+		log.Fatalf("cannot get otel sampling ratio")
+	}
+
+	samplingRatio, err := strconv.ParseFloat(samplingRatioStr, 64)
+	if err != nil {
+		log.Fatalf("failed converting sampling ratio string: %+v", err)
+	}
+
 	log.Printf("trying to create trace provider")
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(samplingRatio)),
 		sdktrace.WithSpanProcessor(bsp),
 	)
 
